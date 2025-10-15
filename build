@@ -8,12 +8,19 @@ else
   docker=docker
 fi
 
+tty=
+if [ -t 1 ]; then
+  tty=t
+fi
+
+# TODO: try with Alpine - https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem#alpine
 exec "$docker" \
   run \
   --rm \
-  -it \
-  -e "TERM=$TERM" \
+  "-i$tty" \
+  -e "TERM=${TERM:-xterm}" \
   -v "$(pwd):/target" \
+  --pull=always \
   ubuntu \
   sh -ec "$(
 cat <<'EOF'
@@ -67,16 +74,15 @@ CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-app-upnp=y
 FILE
 make defconfig
-wget \
-  --no-check-certificate \
-  -P package/kernel/mt76/patches \
-  https://github.com/im-0/openwrt/raw/14dcfb9/package/kernel/mt76/patches/999-0001-wifi-mt76-mt7996-Use-tx_power-from-default-fw-if-EEP.patch
+mkdir -p package/kernel/mt76/patches
+cp -vt package/kernel/mt76/patches /target/patches/9999-new-tx-power-eeprom-0s.patch
 cat > "$HOME/.wgetrc" <<'FILE'
 check_certificate=off
 FILE
 # NOTE: may fail some times due to lack of memory or storage
 make -j $(nproc) download world
 # make -j1 V=sc
+git rev-parse HEAD > bin/targets/mediatek/filogic/openwrt.revision
 CMD
 if [ -e /target/output ]; then
   rm -rf /target/output

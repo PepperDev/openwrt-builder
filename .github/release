@@ -1,0 +1,56 @@
+#!/bin/sh
+
+set -e
+
+release=$(
+wget -qO- "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/latest" 2> /dev/null |
+  sed -r '/"tag_name"\s*:\s*"[^"]*"/!d;s@^.*"tag_name"\s*:\s*"([^"]*)".*$@\1@;q' || :
+)
+remote=$(
+wget -qO- "$GITHUB_API_URL/repos/openwrt/openwrt/commits/HEAD" |
+  sed -r '/"sha"\s*:\s*"[^"]*"/!d;s@^.*"sha"\s*:\s*"([^"]*)".*$@\1@;q'
+)
+
+if [ "$GITHUB_EVENT_NAME" = schedule -a -n "$release" ]; then
+  revision=$(wget -qO- "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$release/openwrt.revision" || :)
+  if [ -n "$revision" -a "$remote" = "$revision" ]; then
+    printf 'No updates since last run!\n'
+    exit
+  fi
+fi
+
+apk -q --no-cache add docker-cli acl git
+
+uid=$(shuf -i2000-9999 -n1)
+
+setfacl -m "u:$uid:rw" /var/run/docker.sock
+
+install -o "$uid" -g "$uid" -m 755 -d /tmp/h
+
+HOME=/tmp/h nsenter \
+  "--setuid=$uid" \
+  "--setgid=$uid" \
+  "--wd=/tmp/h" \
+  sh -es <<'USER'
+git clone \
+  --depth=1 \
+  "--revision=$GITHUB_SHA" \
+  "${GITHUB_SERVER_URL%%://*}://x-access-token:$GITHUB_TOKEN@${GITHUB_SERVER_URL#*://}/$GITHUB_REPOSITORY" \
+  .
+./build
+USER
+
+if [ -n "$release" ]; then
+  revision=$(wget -qO- "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$release/version.buildinfo" || :)
+  if [ "$revision" = "$(cat /tmp/h/output/version.buildinfo)" ]; then
+    printf 'Same OpenWRT version, no revision needed!\n'
+    exit
+  fi
+fi
+
+printf '%s\n' "$remote" > /tmp/h/output/openwrt.revision
+
+# TODO: upload /tmp/h/output - openwrt.revision
+# version.buildinfo
+# openwrt-mediatek-filogic-bananapi_bpi-r4-sdcard.img.gz
+# openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb
