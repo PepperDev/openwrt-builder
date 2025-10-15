@@ -1,0 +1,92 @@
+#!/bin/sh
+
+set -e
+
+if which podman > /dev/null; then
+  docker=podman
+else
+  docker=docker
+fi
+
+exec "$docker" \
+  run \
+  --rm \
+  -it \
+  -e "TERM=$TERM" \
+  -v "$(pwd):/target" \
+  ubuntu \
+  sh -ec "$(
+cat <<'EOF'
+apt-get update
+apt-get \
+  --no-install-recommends \
+  --autoremove \
+  --purge \
+  -y \
+  dist-upgrade
+DEBIAN_FRONTEND=noninteractive \
+apt-get \
+  --no-install-recommends \
+  --autoremove \
+  -y \
+  install \
+  git \
+  wget \
+  gcc \
+  g++ \
+  make \
+  flex \
+  bison \
+  gawk \
+  rsync \
+  gettext \
+  unzip \
+  file \
+  patch \
+  bzip2 \
+  python3-setuptools \
+  libncurses-dev \
+  swig \
+  xz-utils
+rm -rf /var/lib/apt/lists /var/cache/apt/archives /var/lib/dpkg/lock /var/lib/dpkg/updates/*
+install -o 2000 -g 2000 -m 755 -d /tmp/h
+HOME=/tmp/h nsenter \
+  --setuid=2000 \
+  --setgid=2000 \
+  --wd=/tmp/h \
+  /bin/sh -es <<'CMD'
+git -c http.sslVerify=false clone -b openwrt-24.10 --depth=1 https://github.com/openwrt/openwrt.git
+cd openwrt
+GIT_SSL_NO_VERIFY=1 scripts/feeds update -a
+scripts/feeds install -a
+cat > .config <<'FILE'
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_filogic=y
+CONFIG_TARGET_mediatek_filogic_DEVICE_bananapi_bpi-r4=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-app-upnp=y
+FILE
+make defconfig
+wget \
+  --no-check-certificate \
+  -P package/kernel/mt76/patches \
+  https://github.com/im-0/openwrt/raw/14dcfb9/package/kernel/mt76/patches/999-0001-wifi-mt76-mt7996-Use-tx_power-from-default-fw-if-EEP.patch
+cat > "$HOME/.wgetrc" <<'FILE'
+check_certificate=off
+FILE
+# NOTE: may fail some times due to lack of memory or storage
+make -j $(nproc) download world
+# make -j1 V=sc
+CMD
+if [ -e /target/output ]; then
+  rm -rf /target/output
+fi
+read -r uid gid <<CMD
+$(stat -c '%u %g' /target)
+CMD
+nsenter \
+  "--setuid=$uid" \
+  "--setgid=$gid" \
+  cp -rvT /tmp/h/openwrt/bin/targets/mediatek/filogic /target/output
+EOF
+)"
